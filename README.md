@@ -1,7 +1,7 @@
 
 # Flight Price Prediction Dashboard
 
-This repository contains a dashboard for exploring and predicting flight prices. It uses Python libraries such as Pandas, Dash, Matplotlib, and Scikit-learn.
+This repository contains a dashboard for exploring and predicting flight prices. It uses Python libraries such as Pandas, Dash, PySpark, and Matplotlib.
 
 ---
 
@@ -52,9 +52,9 @@ This repository contains a dashboard for exploring and predicting flight prices.
    source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
    ```
 
-3. Run the Dash application using PySpark:
+3. Run the Dash application:
    ```bash
-   ./bin/spark-submit tourism_analysis_dashboard.py
+   python tourism_analysis_dashboard.py
    ```
 
 4. Open a web browser and go to:
@@ -66,9 +66,20 @@ This repository contains a dashboard for exploring and predicting flight prices.
 
 ## Features
 
-- **Data Preprocessing**: Cleans and prepares the flight price dataset.
-- **Visualization**: Interactive graphs and visual summaries of trends.
-- **Prediction**: Predicts flight prices using a Linear Regression model.
+- **Data Preprocessing**:  
+   The data is cleaned and prepared for analysis using PySpark. It includes feature extraction, handling missing values, and encoding categorical variables.  
+
+- **Visualization**:  
+   The dashboard includes interactive and static visualizations for:  
+   - Monthly spending trends  
+   - Top 10 popular destinations  
+   - Peak hours for flights  
+
+- **Prediction**:  
+   A Linear Regression model is used to predict flight prices based on features such as departure time, duration, and total stops.
+
+- **Evaluation**:  
+   Model performance is evaluated using metrics like RMSE (Root Mean Square Error) and RÂ² Score.
 
 ---
 
@@ -76,14 +87,14 @@ This repository contains a dashboard for exploring and predicting flight prices.
 
 ```plaintext
 BigDataProject/
-├── tourism_analysis_dashboard.py       # Main application file
-├── Data_Train.xlsx                     # Dataset
-├── requirements.txt                    # List of required packages
-├── README.md                           # Project documentation
+â”œâ”€â”€ tourism_analysis_dashboard.py       # Main application file
+â”œâ”€â”€ Data_Train.xlsx                     # Dataset
+â”œâ”€â”€ requirements.txt                    # List of required packages
+â”œâ”€â”€ README.md                           # Project documentation
 ```
 
 ---
 
 ## Contribution
 
-This project was created and developed by **Nour Il Islem Hermassi**. Feel free to explore and modify for educational or personal use.
+This project was created and developed by **Nour Il Islem Hermassi**. Feel free to explore and modify it for educational or personal use.
