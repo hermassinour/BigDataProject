@@ -3,91 +3,122 @@ from dash import dcc, html
 from dash.dependencies import Input, Output
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import root_mean_squared_error, r2_score
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, month, year, to_date, regexp_extract, substring, dayofweek
+from pyspark.ml.feature import StringIndexer, OneHotEncoder, VectorAssembler, MinMaxScaler
+from pyspark.ml.regression import LinearRegression
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import RegressionEvaluator
 import base64
 import io
+
+# Initialisation de la session Spark
+spark = SparkSession.builder \
+    .appName("PrÃ©diction des prix des vols") \
+    .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
+    .getOrCreate()
 
 # Initialisation de l'application Dash
 app = dash.Dash(__name__)
 
-# Charger les données depuis un fichier Excel
-print("Chargement des données...")
-df = pd.read_excel("Data_Train.xlsx")
+# Charger les donnÃ©es depuis un fichier Excel
+print("Chargement des donnÃ©es...")
+df = pd.read_excel("Data_Train.xlsx")  # Charger les donnÃ©es Ã  l'aide de pandas
 
-# Pré-traitement des données
-print("Pré-traitement des données...")
+# Convertir le DataFrame pandas en DataFrame PySpark
+spark_df = spark.createDataFrame(df)
 
-# On s'assure que 'Date_of_Journey' est bien au format datetime
-# Si des valeurs sont manquantes ou invalides, on met une date par défaut
-df['Date_of_Journey'] = pd.to_datetime(df['Date_of_Journey'], dayfirst=True, errors='coerce').fillna(pd.Timestamp("1970-01-01"))
+# PrÃ©traitement des donnÃ©es
+print("PrÃ©traitement des donnÃ©es...")
 
-# On extrait les heures et minutes depuis 'Duration' et 'Dep_Time'
-# Pratique pour analyser les tendances selon l'heure
-df['Hours'] = pd.to_datetime(df['Dep_Time'], format='%H:%M', errors='coerce').dt.hour
-df['Minutes'] = df['Duration'].str.extract(r'(\d+)m', expand=False).fillna(0).astype(int)
+# Conversion de 'Date_of_Journey' en format date
+spark_df = spark_df.withColumn("Date_of_Journey", to_date("Date_of_Journey", "dd/MM/yyyy"))
 
-# Découpage de la date en mois et année pour des analyses plus simples
-df['Month'] = df['Date_of_Journey'].dt.month
-df['Year'] = df['Date_of_Journey'].dt.year
+# Extraction du mois, de l'annÃ©e et du jour de la semaine depuis 'Date_of_Journey'
+spark_df = spark_df.withColumn("Month", month(spark_df["Date_of_Journey"]))
+spark_df = spark_df.withColumn("Year", year(spark_df["Date_of_Journey"]))
+spark_df = spark_df.withColumn("Weekday", dayofweek(spark_df["Date_of_Journey"]))  # Dimanche = 1, Samedi = 7
 
-# On supprime les lignes où le prix est manquant
-# Car ces lignes ne servent pas à l'entraînement du modèle
-df = df.dropna(subset=["Price"])
+# CrÃ©ation d'une colonne 'Weekend' (1 si samedi/dimanche, sinon 0)
+spark_df = spark_df.withColumn("Weekend", when((col("Weekday") == 7) | (col("Weekday") == 1), 1).otherwise(0))
 
-# Calcul des dépenses totales par mois (utile pour des visualisations)
-spending_by_month = df.groupby("Month")["Price"].sum().reset_index()
+# Extraction des heures depuis 'Dep_Time'
+spark_df = spark_df.withColumn("Hours", substring("Dep_Time", 1, 2).cast("int"))
 
-# Analyse des destinations les plus populaires
-# Compte combien de fois chaque destination est mentionnée
-popular_destinations = df["Destination"].value_counts().reset_index()
-popular_destinations.columns = ["Destination", "Count"]
+# Extraction des minutes depuis 'Duration' (en supposant le format '2h 50m')
+spark_df = spark_df.withColumn("Minutes", regexp_extract("Duration", r'(\d+)m', 1).cast("int"))
 
-# Analyse des heures où il y a le plus de départs
-peak_hours = df['Hours'].value_counts().reset_index()
-peak_hours.columns = ["Hour", "Count"]
+# Conversion de 'Total_Stops' en valeurs numÃ©riques
+# Ex : "non-stop" = 0, "1 stop" = 1, etc.
+spark_df = spark_df.withColumn("Stops", when(col("Total_Stops") == "non-stop", 0)
+                               .when(col("Total_Stops").like("%1%"), 1)
+                               .when(col("Total_Stops").like("%2%"), 2)
+                               .when(col("Total_Stops").like("%3%"), 3)
+                               .when(col("Total_Stops").like("%4%"), 4)
+                               .otherwise(0))
 
-# Encodage des colonnes catégoriques (comme Airline, Source, Destination)
-# Cela transforme ces colonnes en chiffres pour que le modèle puisse les comprendre
-df = pd.get_dummies(df, columns=["Airline", "Source", "Destination"], drop_first=True)
+# Gestion des valeurs manquantes
+spark_df = spark_df.fillna({'Hours': 0, 'Minutes': 0, 'Stops': 0}).dropna(subset=["Price"])
 
-# Préparation des données pour la prédiction
-# Sélection des colonnes qui vont servir comme caractéristiques pour le modèle
-feature_columns = ["Hours", "Minutes", "Month", "Year"] + [col for col in df.columns if col.startswith(("Airline_", "Source_", "Destination_"))]
-X = df[feature_columns]
-y = df["Price"]
+# Encodage des colonnes catÃ©goriques (Airline, Source, Destination)
+categorical_columns = ["Airline", "Source", "Destination"]
+indexers = [StringIndexer(inputCol=col, outputCol=col + "_Index") for col in categorical_columns]
+encoders = [OneHotEncoder(inputCol=col + "_Index", outputCol=col + "_Vec") for col in categorical_columns]
 
-# On divise les données en deux parties : entraînement et test
-# Cela permet de vérifier si le modèle fonctionne bien
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# Assemblage des caractÃ©ristiques en un seul vecteur
+assembler = VectorAssembler(
+    inputCols=["Hours", "Minutes", "Stops", "Month", "Year", "Weekday", "Weekend"] + [col + "_Vec" for col in categorical_columns],
+    outputCol="features"
+)
 
-# On entraîne un modèle de régression linéaire
-# Ce modèle essaiera de prédire le prix des vols
-lr = LinearRegression()
-lr.fit(X_train, y_train)
+# Normalisation des caractÃ©ristiques
+scaler = MinMaxScaler(inputCol="features", outputCol="scaledFeatures")
 
-# Évaluation du modèle
-# On compare les prédictions du modèle avec les vrais prix
-y_pred = lr.predict(X_test)
-rmse = root_mean_squared_error(y_test, y_pred)  # Calcul de l'erreur moyenne quadratique
-r2 = r2_score(y_test, y_pred)  # Score R² pour voir la qualité du modèle
+# DÃ©finition du modÃ¨le de rÃ©gression linÃ©aire
+lr = LinearRegression(featuresCol="scaledFeatures", labelCol="Price", regParam=0.01, elasticNetParam=0.8, maxIter=100)
 
-# Création des graphiques pour le tableau de bord
+# CrÃ©ation du pipeline
+pipeline = Pipeline(stages=indexers + encoders + [assembler, scaler, lr])
+
+# Division des donnÃ©es en ensemble d'entraÃ®nement et de test
+train_data, test_data = spark_df.randomSplit([0.8, 0.2], seed=42)
+
+# EntraÃ®nement du modÃ¨le
+print("EntraÃ®nement du modÃ¨le...")
+pipeline_model = pipeline.fit(train_data)
+
+# Ã‰valuation du modÃ¨le
+print("Ã‰valuation du modÃ¨le...")
+predictions = pipeline_model.transform(test_data)
+
+# Calcul des mÃ©triques d'Ã©valuation
+evaluator_rmse = RegressionEvaluator(labelCol="Price", predictionCol="prediction", metricName="rmse")
+rmse = evaluator_rmse.evaluate(predictions)
+
+evaluator_r2 = RegressionEvaluator(labelCol="Price", predictionCol="prediction", metricName="r2")
+r2 = evaluator_r2.evaluate(predictions)
+
+print(f"Erreur quadratique moyenne (RMSE) : {rmse}")
+print(f"Score RÂ² : {r2}")
+
+# Extraction des donnÃ©es pour les visualisations
+spending_by_month = spark_df.groupBy("Month").agg({"Price": "sum"}).toPandas()
+popular_destinations = spark_df.groupBy("Destination").count().toPandas().sort_values("count", ascending=False)
+peak_hours = spark_df.groupBy("Hours").count().toPandas().sort_values("count", ascending=False)
+
+# Fonctions de visualisation
 def create_monthly_spending_figure():
-    # Graphique pour visualiser les dépenses mensuelles
     fig = plt.figure(figsize=(8, 6))
-    plt.bar(spending_by_month["Month"], spending_by_month["Price"], color='skyblue')
-    plt.title("Dépenses mensuelles")
+    plt.bar(spending_by_month["Month"], spending_by_month["sum(Price)"], color='skyblue')
+    plt.title("DÃ©penses mensuelles")
     plt.xlabel("Mois")
-    plt.ylabel("Dépenses totales")
+    plt.ylabel("DÃ©penses totales")
     plt.xticks(spending_by_month["Month"])
     return fig
 
 def create_popular_destinations_figure():
-    # Graphique pour les destinations les plus populaires
     fig = plt.figure(figsize=(10, 6))
-    plt.bar(popular_destinations["Destination"][:10], popular_destinations["Count"][:10], color='orange')
+    plt.bar(popular_destinations["Destination"][:10], popular_destinations["count"][:10], color='orange')
     plt.title("Top 10 des destinations populaires")
     plt.xlabel("Destination")
     plt.ylabel("Nombre")
@@ -95,17 +126,14 @@ def create_popular_destinations_figure():
     return fig
 
 def create_peak_hours_figure():
-    # Graphique pour analyser les heures de pointe
     fig = plt.figure(figsize=(8, 6))
-    plt.bar(peak_hours["Hour"], peak_hours["Count"], color='green')
+    plt.bar(peak_hours["Hours"], peak_hours["count"], color='green')
     plt.title("Heures de pointe")
     plt.xlabel("Heure")
     plt.ylabel("Nombre")
-    plt.xticks(peak_hours["Hour"])
+    plt.xticks(peak_hours["Hours"])
     return fig
 
-# Fonction pour convertir les graphiques matplotlib en images (base64)
-# Cela permet de les afficher dans le tableau de bord
 def fig_to_base64(fig):
     img_bytes = io.BytesIO()
     fig.savefig(img_bytes, format='png')
@@ -115,27 +143,27 @@ def fig_to_base64(fig):
 
 # Mise en page de l'application Dash
 app.layout = html.Div([
-    html.H1("Tableau de bord : Prédiction des prix des vols"),
+    html.H1("Tableau de bord : PrÃ©diction des prix des vols"),
     
     html.Div([
-        html.H3(f"RMSE : {rmse:.2f}"),  # Affichage de l'erreur moyenne quadratique
-        html.H3(f"Score R² : {r2:.2f}")  # Affichage du score R²
+        html.H3(f"RMSE : {rmse:.2f}"),
+        html.H3(f"Score RÂ² : {r2:.2f}")
     ]),
     
-    # Différentes sections pour afficher les graphiques interactifs et statiques
+    # Section des dÃ©penses mensuelles
     html.Div([
         html.Div([
-            html.H3("Dépenses mensuelles (Interactif)"),
+            html.H3("DÃ©penses mensuelles (Interactif)"),
             dcc.Graph(id='monthly-spending-graph'),
         ], style={'width': '48%', 'display': 'inline-block'}),
         
         html.Div([
-            html.H3("Dépenses mensuelles (Image statique)"),
+            html.H3("DÃ©penses mensuelles (Image statique)"),
             html.Img(id='monthly-spending-img'),
         ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'})
     ]),
     
-    # Section pour les destinations populaires
+    # Section des destinations populaires
     html.Div([
         html.Div([
             html.H3("Top 10 des destinations populaires (Interactif)"),
@@ -148,7 +176,7 @@ app.layout = html.Div([
         ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'})
     ]),
     
-    # Section pour les heures de pointe
+    # Section des heures de pointe
     html.Div([
         html.Div([
             html.H3("Heures de pointe (Interactif)"),
@@ -162,7 +190,6 @@ app.layout = html.Div([
     ])
 ])
 
-# Callback pour mettre à jour les graphiques lorsque l'application est chargée
 @app.callback(
     Output('monthly-spending-graph', 'figure'),
     Output('popular-destinations-graph', 'figure'),
@@ -170,36 +197,36 @@ app.layout = html.Div([
     Output('monthly-spending-img', 'src'),
     Output('popular-destinations-img', 'src'),
     Output('peak-hours-img', 'src'),
-    Input('monthly-spending-graph', 'id')  # L'entrée déclenche l'actualisation
+    Input('monthly-spending-graph', 'id')
 )
 def update_graphs(_):
-    # On génère les graphiques interactifs et les images statiques
+    # GÃ©nÃ©ration des graphiques pour chaque section
     monthly_spending_figure = create_monthly_spending_figure()
     popular_destinations_figure = create_popular_destinations_figure()
     peak_hours_figure = create_peak_hours_figure()
 
-    # Conversion des graphiques matplotlib en base64
+    # Conversion des graphiques matplotlib en images (base64)
     monthly_spending_img_base64 = fig_to_base64(monthly_spending_figure)
     popular_destinations_img_base64 = fig_to_base64(popular_destinations_figure)
     peak_hours_img_base64 = fig_to_base64(peak_hours_figure)
 
-    # Retourne les graphiques et les images à afficher
+    # Retourne les graphiques et les images pour l'affichage dans Dash
     return (
         {
             'data': [{
                 'x': spending_by_month["Month"],
-                'y': spending_by_month["Price"],
+                'y': spending_by_month["sum(Price)"],
                 'type': 'bar',
-                'name': 'Dépenses mensuelles',
+                'name': 'DÃ©penses mensuelles',
             }],
             'layout': {
-                'title': 'Dépenses mensuelles'
+                'title': 'DÃ©penses mensuelles'
             }
         },
         {
             'data': [{
                 'x': popular_destinations["Destination"][:10],
-                'y': popular_destinations["Count"][:10],
+                'y': popular_destinations["count"][:10],
                 'type': 'bar',
                 'name': 'Destinations populaires',
             }],
@@ -209,8 +236,8 @@ def update_graphs(_):
         },
         {
             'data': [{
-                'x': peak_hours["Hour"],
-                'y': peak_hours["Count"],
+                'x': peak_hours["Hours"],
+                'y': peak_hours["count"],
                 'type': 'bar',
                 'name': 'Heures de pointe',
             }],
@@ -223,6 +250,6 @@ def update_graphs(_):
         peak_hours_img_base64
     )
 
-# Lancer l'application Dash
+# Lancement de l'application Dash
 if __name__ == '__main__':
     app.run_server(debug=True)
