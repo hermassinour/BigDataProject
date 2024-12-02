@@ -87,10 +87,10 @@ This repository contains a dashboard for exploring and predicting flight prices.
 
 ```plaintext
 BigDataProject/
-â”œâ”€â”€ tourism_analysis_dashboard.py       # Main application file
-â”œâ”€â”€ Data_Train.xlsx                     # Dataset
-â”œâ”€â”€ requirements.txt                    # List of required packages
-â”œâ”€â”€ README.md                           # Project documentation
+tourism_analysis_dashboard.py       # Main application file
+Data_Train.xlsx                     # Dataset
+requirements.txt                    # List of required packages
+README.md                           # Project documentation
 ```
 
 ---
