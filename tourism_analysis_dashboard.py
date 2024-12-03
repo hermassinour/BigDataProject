@@ -147,7 +147,7 @@ app.layout = html.Div([
     
     html.Div([
         html.H3(f"RMSE : {rmse:.2f}"),
-        html.H3(f"Score RÂ² : {r2:.2f}")
+        html.H3(f"Score R² : {r2:.2f}")
     ]),
     
     # Section des depenses mensuelles
