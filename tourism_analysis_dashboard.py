@@ -23,7 +23,7 @@ app = dash.Dash(__name__)
 
 # Charger les donnees depuis un fichier Excel
 print("Chargement des donnees...")
-df = pd.read_excel("Data_Train.xlsx")  # Charger les donnees Ã  l'aide de pandas
+df = pd.read_excel("Data_Train.xlsx")  # Charger les donnees a l'aide de pandas
 
 # Convertir le DataFrame pandas en DataFrame PySpark
 spark_df = spark.createDataFrame(df)
@@ -74,21 +74,21 @@ assembler = VectorAssembler(
 # Normalisation des caracteristiques
 scaler = MinMaxScaler(inputCol="features", outputCol="scaledFeatures")
 
-# Definition du modÃ¨le de regression lineaire
+# Definition du modele de regression lineaire
 lr = LinearRegression(featuresCol="scaledFeatures", labelCol="Price", regParam=0.01, elasticNetParam=0.8, maxIter=100)
 
 # Creation du pipeline
 pipeline = Pipeline(stages=indexers + encoders + [assembler, scaler, lr])
 
-# Division des donnees en ensemble d'entraÃ®nement et de test
+# Division des donnees en ensemble d'entrainement et de test
 train_data, test_data = spark_df.randomSplit([0.8, 0.2], seed=42)
 
-# EntraÃ®nement du modÃ¨le
-print("EntraÃ®nement du modÃ¨le...")
+# Entrainement du modele
+print("Entrainement du modele...")
 pipeline_model = pipeline.fit(train_data)
 
-# Ã‰valuation du modÃ¨le
-print("Ã‰valuation du modÃ¨le...")
+# Evaluation du modele
+print("Evaluation du modele...")
 predictions = pipeline_model.transform(test_data)
 
 # Calcul des metriques d'evaluation
@@ -99,7 +99,7 @@ evaluator_r2 = RegressionEvaluator(labelCol="Price", predictionCol="prediction",
 r2 = evaluator_r2.evaluate(predictions)
 
 print(f"Erreur quadratique moyenne (RMSE) : {rmse}")
-print(f"Score RÂ² : {r2}")
+print(f"Score R² : {r2}")
 
 # Extraction des donnees pour les visualisations
 spending_by_month = spark_df.groupBy("Month").agg({"Price": "sum"}).toPandas()
