@@ -14,32 +14,32 @@ import io
 
 # Initialisation de la session Spark
 spark = SparkSession.builder \
-    .appName("PrÃ©diction des prix des vols") \
+    .appName("Prediction des prix des vols") \
     .config("spark.sql.legacy.timeParserPolicy", "LEGACY") \
     .getOrCreate()
 
 # Initialisation de l'application Dash
 app = dash.Dash(__name__)
 
-# Charger les donnÃ©es depuis un fichier Excel
-print("Chargement des donnÃ©es...")
-df = pd.read_excel("Data_Train.xlsx")  # Charger les donnÃ©es Ã  l'aide de pandas
+# Charger les donnees depuis un fichier Excel
+print("Chargement des donnees...")
+df = pd.read_excel("Data_Train.xlsx")  # Charger les donnees Ã  l'aide de pandas
 
 # Convertir le DataFrame pandas en DataFrame PySpark
 spark_df = spark.createDataFrame(df)
 
-# PrÃ©traitement des donnÃ©es
-print("PrÃ©traitement des donnÃ©es...")
+# Pretraitement des donnees
+print("Pretraitement des donnees...")
 
 # Conversion de 'Date_of_Journey' en format date
 spark_df = spark_df.withColumn("Date_of_Journey", to_date("Date_of_Journey", "dd/MM/yyyy"))
 
-# Extraction du mois, de l'annÃ©e et du jour de la semaine depuis 'Date_of_Journey'
+# Extraction du mois, de l'annee et du jour de la semaine depuis 'Date_of_Journey'
 spark_df = spark_df.withColumn("Month", month(spark_df["Date_of_Journey"]))
 spark_df = spark_df.withColumn("Year", year(spark_df["Date_of_Journey"]))
 spark_df = spark_df.withColumn("Weekday", dayofweek(spark_df["Date_of_Journey"]))  # Dimanche = 1, Samedi = 7
 
-# CrÃ©ation d'une colonne 'Weekend' (1 si samedi/dimanche, sinon 0)
+# Creation d'une colonne 'Weekend' (1 si samedi/dimanche, sinon 0)
 spark_df = spark_df.withColumn("Weekend", when((col("Weekday") == 7) | (col("Weekday") == 1), 1).otherwise(0))
 
 # Extraction des heures depuis 'Dep_Time'
@@ -48,7 +48,7 @@ spark_df = spark_df.withColumn("Hours", substring("Dep_Time", 1, 2).cast("int"))
 # Extraction des minutes depuis 'Duration' (en supposant le format '2h 50m')
 spark_df = spark_df.withColumn("Minutes", regexp_extract("Duration", r'(\d+)m', 1).cast("int"))
 
-# Conversion de 'Total_Stops' en valeurs numÃ©riques
+# Conversion de 'Total_Stops' en valeurs numeriques
 # Ex : "non-stop" = 0, "1 stop" = 1, etc.
 spark_df = spark_df.withColumn("Stops", when(col("Total_Stops") == "non-stop", 0)
                                .when(col("Total_Stops").like("%1%"), 1)
@@ -60,27 +60,27 @@ spark_df = spark_df.withColumn("Stops", when(col("Total_Stops") == "non-stop", 0
 # Gestion des valeurs manquantes
 spark_df = spark_df.fillna({'Hours': 0, 'Minutes': 0, 'Stops': 0}).dropna(subset=["Price"])
 
-# Encodage des colonnes catÃ©goriques (Airline, Source, Destination)
+# Encodage des colonnes categoriques (Airline, Source, Destination)
 categorical_columns = ["Airline", "Source", "Destination"]
 indexers = [StringIndexer(inputCol=col, outputCol=col + "_Index") for col in categorical_columns]
 encoders = [OneHotEncoder(inputCol=col + "_Index", outputCol=col + "_Vec") for col in categorical_columns]
 
-# Assemblage des caractÃ©ristiques en un seul vecteur
+# Assemblage des caracteristiques en un seul vecteur
 assembler = VectorAssembler(
     inputCols=["Hours", "Minutes", "Stops", "Month", "Year", "Weekday", "Weekend"] + [col + "_Vec" for col in categorical_columns],
     outputCol="features"
 )
 
-# Normalisation des caractÃ©ristiques
+# Normalisation des caracteristiques
 scaler = MinMaxScaler(inputCol="features", outputCol="scaledFeatures")
 
-# DÃ©finition du modÃ¨le de rÃ©gression linÃ©aire
+# Definition du modÃ¨le de regression lineaire
 lr = LinearRegression(featuresCol="scaledFeatures", labelCol="Price", regParam=0.01, elasticNetParam=0.8, maxIter=100)
 
-# CrÃ©ation du pipeline
+# Creation du pipeline
 pipeline = Pipeline(stages=indexers + encoders + [assembler, scaler, lr])
 
-# Division des donnÃ©es en ensemble d'entraÃ®nement et de test
+# Division des donnees en ensemble d'entraÃ®nement et de test
 train_data, test_data = spark_df.randomSplit([0.8, 0.2], seed=42)
 
 # EntraÃ®nement du modÃ¨le
@@ -91,7 +91,7 @@ pipeline_model = pipeline.fit(train_data)
 print("Ã‰valuation du modÃ¨le...")
 predictions = pipeline_model.transform(test_data)
 
-# Calcul des mÃ©triques d'Ã©valuation
+# Calcul des metriques d'evaluation
 evaluator_rmse = RegressionEvaluator(labelCol="Price", predictionCol="prediction", metricName="rmse")
 rmse = evaluator_rmse.evaluate(predictions)
 
@@ -101,7 +101,7 @@ r2 = evaluator_r2.evaluate(predictions)
 print(f"Erreur quadratique moyenne (RMSE) : {rmse}")
 print(f"Score RÂ² : {r2}")
 
-# Extraction des donnÃ©es pour les visualisations
+# Extraction des donnees pour les visualisations
 spending_by_month = spark_df.groupBy("Month").agg({"Price": "sum"}).toPandas()
 popular_destinations = spark_df.groupBy("Destination").count().toPandas().sort_values("count", ascending=False)
 peak_hours = spark_df.groupBy("Hours").count().toPandas().sort_values("count", ascending=False)
@@ -110,9 +110,9 @@ peak_hours = spark_df.groupBy("Hours").count().toPandas().sort_values("count", a
 def create_monthly_spending_figure():
     fig = plt.figure(figsize=(8, 6))
     plt.bar(spending_by_month["Month"], spending_by_month["sum(Price)"], color='skyblue')
-    plt.title("DÃ©penses mensuelles")
+    plt.title("Depenses mensuelles")
     plt.xlabel("Mois")
-    plt.ylabel("DÃ©penses totales")
+    plt.ylabel("Depenses totales")
     plt.xticks(spending_by_month["Month"])
     return fig
 
@@ -143,22 +143,22 @@ def fig_to_base64(fig):
 
 # Mise en page de l'application Dash
 app.layout = html.Div([
-    html.H1("Tableau de bord : PrÃ©diction des prix des vols"),
+    html.H1("Tableau de bord : Prediction des prix des vols"),
     
     html.Div([
         html.H3(f"RMSE : {rmse:.2f}"),
         html.H3(f"Score RÂ² : {r2:.2f}")
     ]),
     
-    # Section des dÃ©penses mensuelles
+    # Section des depenses mensuelles
     html.Div([
         html.Div([
-            html.H3("DÃ©penses mensuelles (Interactif)"),
+            html.H3("Depenses mensuelles (Interactif)"),
             dcc.Graph(id='monthly-spending-graph'),
         ], style={'width': '48%', 'display': 'inline-block'}),
         
         html.Div([
-            html.H3("DÃ©penses mensuelles (Image statique)"),
+            html.H3("Depenses mensuelles (Image statique)"),
             html.Img(id='monthly-spending-img'),
         ], style={'width': '48%', 'display': 'inline-block', 'verticalAlign': 'top'})
     ]),
@@ -200,7 +200,7 @@ app.layout = html.Div([
     Input('monthly-spending-graph', 'id')
 )
 def update_graphs(_):
-    # GÃ©nÃ©ration des graphiques pour chaque section
+    # Generation des graphiques pour chaque section
     monthly_spending_figure = create_monthly_spending_figure()
     popular_destinations_figure = create_popular_destinations_figure()
     peak_hours_figure = create_peak_hours_figure()
@@ -217,10 +217,10 @@ def update_graphs(_):
                 'x': spending_by_month["Month"],
                 'y': spending_by_month["sum(Price)"],
                 'type': 'bar',
-                'name': 'DÃ©penses mensuelles',
+                'name': 'Depenses mensuelles',
             }],
             'layout': {
-                'title': 'DÃ©penses mensuelles'
+                'title': 'Depenses mensuelles'
             }
         },
         {
